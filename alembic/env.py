@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.ext.asyncio import async_engine_from_config, create_async_engine
 
 from alembic import context
 
@@ -18,8 +18,14 @@ load_dotenv()
 config = context.config
 
 _db_url = os.getenv("DATABASE_URL", "")
-if _db_url.startswith("postgresql://"):
+if _db_url.startswith("postgres://"):
+    _db_url = _db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+elif _db_url.startswith("postgresql://"):
     _db_url = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+if "?" in _db_url:
+    _b, _, _qs = _db_url.partition("?")
+    _kept = [p for p in _qs.split("&") if not p.startswith("sslmode=") and not p.startswith("ssl=")]
+    _db_url = _b + ("?" + "&".join(_kept) if _kept else "")
 config.set_main_option("sqlalchemy.url", _db_url)
 
 
@@ -77,10 +83,16 @@ async def run_async_migrations() -> None:
 
     """
 
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+    _ca: dict = {}
+    if any(h in _db_url for h in ("supabase.co", "supabase.com", "neon.tech")):
+        _ca["ssl"] = "require"
+    if ":6543/" in _db_url or "pooler.supabase.com:6543" in _db_url:
+        _ca["statement_cache_size"] = 0
+        _ca["prepared_statement_cache_size"] = 0
+    connectable = create_async_engine(
+        config.get_main_option("sqlalchemy.url"),
         poolclass=pool.NullPool,
+        connect_args=_ca,
     )
 
     async with connectable.connect() as connection:
