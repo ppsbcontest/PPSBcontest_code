@@ -1,8 +1,8 @@
 # 07 — Roadmap
 
-> **Versión**: 1.0
+> **Versión**: 1.1
 > **Horizonte**: 0-36 meses
-> **Estado**: Alineado con la propuesta a Shark Bank Bancaribe
+> **Estado**: Alineado con propuesta Shark Bank Bancaribe. Etapa 0 (MVP) en curso al 11-may-2026.
 
 Este roadmap traduce la visión de tres fases a hitos concretos, métricas verificables y dependencias claras. Es deliberadamente conservador en plazos para reflejar la realidad de un equipo de dos personas con ambición real.
 
@@ -44,8 +44,15 @@ gantt
 **Estado**: 🚧 En curso (este repo).
 
 ### Entregables
-- ✅ Documentación técnica completa (este documento incluido).
-- 🚧 Backend FastAPI con endpoints clave (mock de Bancaribe).
+- ✅ Documentación técnica completa (07 docs `01-` a `07-`).
+- ✅ Backend FastAPI: `POST /v1/payments`, `/confirm`, `GET /v1/payments`(list+detail), `POST /v1/webhook_endpoints`, `GET /v1/webhook_endpoints`, `/health`.
+- ✅ Modelos SQLAlchemy + migración Alembic inicial.
+- ✅ Bank Adapter (Strategy) con `MockBankAdapter` activo, `BancaribeAdapter` stub.
+- ✅ Audit log `events` + outbox `webhook_attempts` con HMAC-SHA256.
+- ✅ Auth API key (SHA256+pepper) + bootstrap seed dev.
+- ✅ Docker Compose local + Dockerfile productivo + Sentry init.
+- 🚧 Integración real Bancaribe `registrarPagoC2pApi` (Día 7).
+- 🚧 Enforcement Idempotency-Key, cifrado pgcrypto, masking PII (Día 6).
 - 🚧 Dashboard Next.js + shadcn con datos seed.
 - 🚧 Checkout Widget embebible.
 - 🚧 Tienda demo end-to-end.

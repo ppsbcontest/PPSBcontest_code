@@ -1,10 +1,28 @@
 # 06 — Modelo de Seguridad
 
-> **Versión**: 1.0
+> **Versión**: 1.1
 > **Aplicabilidad**: Fase 1 (MVP) con roadmap a Fase 3
 > **Marco de referencia**: OWASP Top 10, PCI DSS principles (sin certificación formal en Fase 1)
 
-Este documento describe el modelo de amenazas, controles implementados y roadmap de hardening para Pasarela. Como pasarela de pago opera en un sector de alto riesgo, la seguridad no es opcional — es requisito de existencia.
+Este documento describe el modelo de amenazas, controles implementados y roadmap de hardening. Las secciones marcan 🟡 lo que es diseño objetivo aún no implementado.
+
+## Estado de controles MVP (11-may-2026)
+
+| Control | Implementado | Notas |
+|---|---|---|
+| TLS 1.3 en tránsito | 🟡 dep. de plataforma | Local: HTTP. Prod: terminación TLS en Railway/Cloudflare. |
+| API key hash | ✅ SHA256 + pepper | `API_KEY_PEPPER` env. Migrar a bcrypt en Fase 2. |
+| Auth headers | ✅ `Authorization: Bearer` o `X-API-Key` | |
+| Scope `pk` vs `sk` | 🟡 | Sólo `sk` activo en MVP. |
+| Cifrado pgcrypto de campos sensibles | 🟡 | `account_number_encrypted`/`signing_secret_encrypted` hoy guardan bytes plano. |
+| Audit log inmutable | ✅ | Tabla `events` con sólo INSERT desde código. Restricción de rol DB pendiente. |
+| Webhook firmado HMAC-SHA256 | ✅ | Header `X-Pasarela-Signature: t=...,v1=...`. |
+| Pydantic validators estrictos | 🟡 | Validación de tipo y longitud sí; regex de cédula/teléfono pendiente. |
+| Rate limiting | 🟡 | No implementado. Plan: `slowapi` + Redis Fase 2. |
+| Idempotency-Key enforcement | 🟡 | Columna existe; endpoint no valida header. |
+| Locks pesimistas (`FOR UPDATE`) | 🟡 | `confirm_payment` usa `db.get` sin lock explícito. |
+| Sentry | ✅ opcional (`SENTRY_DSN`) | |
+| 2FA dashboard | 🟡 | Dashboard no existe aún. |
 
 ---
 
@@ -64,27 +82,23 @@ Este documento describe el modelo de amenazas, controles implementados y roadmap
 Formato: {prefix}_{environment}_{52_chars_base62}
 ```
 
-**Almacenamiento**:
-- Solo el **hash bcrypt** (cost factor 12) se guarda en DB.
-- El valor en plano se muestra **una sola vez** al crear.
-- Los primeros 8 caracteres se guardan en plano para mostrar en dashboard (ej: "sk_live_51Hx...").
+**Almacenamiento MVP** (`app/security.py` + `app/api/deps.py`):
+- Hash **SHA256 con pepper** (`API_KEY_PEPPER` env). Migración a bcrypt cost 12 en Fase 2.
+- El valor en plano se muestra **una sola vez** al crear (endpoint `POST /v1/api_keys` aún no implementado; en MVP la key dev se sembra vía `bootstrap.py`).
 
-**Validación**:
+**Validación actual MVP:**
 ```python
-async def authenticate_api_key(raw_key: str) -> ApiKey:
-    if not raw_key.startswith(("sk_", "pk_")):
-        raise AuthError("malformed_key")
-    
-    prefix = raw_key[:11]  # 'sk_live_51H'
-    candidates = await api_key_repo.find_by_prefix(prefix)
-    
-    for candidate in candidates:
-        if bcrypt.checkpw(raw_key.encode(), candidate.key_hash.encode()):
-            if candidate.revoked_at:
-                raise AuthError("key_revoked")
-            return candidate
-    
-    raise AuthError("invalid_key")
+# app/security.py
+def hash_api_key(plaintext: str) -> str:
+    pepper = os.getenv("API_KEY_PEPPER", "dev_pepper_change_me")
+    return hashlib.sha256(f"{pepper}:{plaintext}".encode("utf-8")).hexdigest()
+
+# app/api/deps.py
+key_hash = hash_api_key(plaintext)
+res = await db.execute(select(ApiKey).where(ApiKey.key_hash == key_hash))
+api_key = res.scalar_one_or_none()
+if api_key is None or api_key.revoked_at is not None:
+    raise HTTPException(401, "invalid_api_key")
 ```
 
 **Rotación**:
@@ -177,9 +191,11 @@ def sanitize_for_log(text: str) -> str:
 
 ## Capa 4: Datos en reposo
 
-### Cifrado de campos sensibles
+### Cifrado de campos sensibles (🟡 diseño)
 
-Tabla `merchant_accounts.account_number_encrypted` y `webhook_endpoints.signing_secret_encrypted` usan **`pgcrypto`** con AES-256:
+**Estado MVP**: las columnas `BYTEA` (`account_number_encrypted`, `signing_secret_encrypted`) existen, pero **almacenan bytes plano** del UTF-8 (no cifrado). Esto es deuda técnica explícita; el cifrado pgcrypto está planeado Día 6-7.
+
+**Diseño objetivo** — Tabla `merchant_accounts.account_number_encrypted` y `webhook_endpoints.signing_secret_encrypted` usan **`pgcrypto`** con AES-256:
 
 ```sql
 -- Al insertar
@@ -217,14 +233,14 @@ FROM merchant_accounts WHERE id = :id;
 
 ### Hacia comerciantes (webhooks)
 
-- Solo aceptamos URLs `https://` para webhook endpoints (validado en creación).
-- Firma HMAC-SHA256 obligatoria.
-- Header `Pasarela-Signature: t=<unix_ts>,v1=<hex>`.
+- 🟡 Validación `https://` en creación pendiente (MVP acepta cualquier URL).
+- ✅ Firma HMAC-SHA256 obligatoria.
+- ✅ Header `X-Pasarela-Signature: t=<unix_ts>,v1=<hex>` (con prefijo `X-`).
 - Timestamp incluido para prevenir **replay attacks**: el comerciante debe rechazar webhooks con timestamp > 5 minutos de antigüedad.
 
 ---
 
-## Capa 6: Rate limiting
+## Capa 6: Rate limiting 🟡 (no implementado en MVP)
 
 ### Por API key
 
@@ -381,8 +397,14 @@ Esto va aquí porque **un equipo serio reconoce lo que falta**. Esto le da credi
 | Item | Severidad | Plan |
 |---|---|---|
 | Cédulas/teléfonos en plano en DB | Media | Cifrado determinístico en Fase 2 |
-| Idempotency keys en memoria (no distribuido) | Baja | Redis en Fase 2 |
-| Sin 2FA en dashboard | Media | TOTP en Fase 2 |
+| `account_number_encrypted`/`signing_secret_encrypted` sin cifrar (bytes plano) | Alta | pgcrypto Día 6-7 |
+| API keys con SHA256+pepper en vez de bcrypt | Media | Migrar a bcrypt cost 12 Fase 2 |
+| Idempotency-Key header no validado | Media | Implementar Día 6 |
+| Webhooks sin retry/backoff (single attempt) | Media | Worker ARQ Fase 2 |
+| Sin rate limiting | Media | `slowapi` + Redis Fase 2 |
+| Sin masking de PII en responses | Media | Día 6 |
+| Sin lock pesimista `FOR UPDATE` en `confirm` | Media | Día 6 |
+| Sin 2FA en dashboard | Media (no hay dashboard aún) | TOTP en Fase 2 |
 | Sin pen-test externo | Alta para producción real | Antes de procesar dinero real |
 | Sin tests automatizados de seguridad | Media | CI con `bandit`, `safety`, `npm audit` en Fase 2 |
 | Sin oficial de cumplimiento | N/A en Fase 1 | Bajo paraguas Bancaribe; propio en Fase 3 |

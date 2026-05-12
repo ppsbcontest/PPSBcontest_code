@@ -10,7 +10,7 @@ from app.security import hash_api_key
 DEV_MERCHANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 DEV_MERCHANT_ACCOUNT_ID = UUID("00000000-0000-0000-0000-000000000002")
 DEV_API_KEY_ID = UUID("00000000-0000-0000-0000-000000000003")
-DEV_API_KEY_PLAINTEXT = "sk_test_dev_pasarela_001"
+DEV_API_KEY_PLAINTEXT = "sk_test_dev_rutiva_001"
 
 
 async def _ensure_merchant(session: AsyncSession) -> None:
@@ -23,7 +23,7 @@ async def _ensure_merchant(session: AsyncSession) -> None:
             external_id="merch_dev_001",
             legal_name="Dev Merchant C.A.",
             rif="J-12345678-9",
-            contact_email="dev@pasarela.local",
+            contact_email="dev@rutiva.local",
             status="active",
         )
     )

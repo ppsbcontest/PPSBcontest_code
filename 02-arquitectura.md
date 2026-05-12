@@ -1,10 +1,33 @@
 # 02 — Arquitectura del Sistema
 
-> **Versión**: 1.0
-> **Fecha**: 9 de mayo de 2026
-> **Stack**: Python 3.12 / FastAPI / PostgreSQL / Next.js / TypeScript
+> **Versión**: 1.1
+> **Fecha**: 11 de mayo de 2026
+> **Stack actual MVP**: Python 3.12 / FastAPI / PostgreSQL 16 / SQLAlchemy 2.0 async / Alembic / asyncpg / Sentry
+> **Stack planeado (post-MVP)**: + Next.js Dashboard, Checkout Widget (TS/Vite), Resend, Supabase Auth
 
 Este documento describe la arquitectura del MVP (Fase 1) usando el modelo C4 (Context, Containers, Components). Las decisiones arquitectónicas tomadas aquí permiten evolución a Fase 2 (multi-banco) y Fase 3 (modelo agregador) sin reescritura.
+
+## Estado del MVP (al 11-may-2026)
+
+Implementado:
+- Core API (FastAPI) con endpoints `POST /v1/payments`, `POST /v1/payments/{id}/confirm`, `GET /v1/payments`, `GET /v1/payments/{id}`, `POST /v1/webhook_endpoints`, `GET /v1/webhook_endpoints`, `GET /health`.
+- Modelos SQLAlchemy + migración inicial Alembic (`3ca9bba912db_20260511_initial_schema`).
+- Bank Adapter (Strategy) con `MockBankAdapter` (activo) y `BancaribeAdapter` (stub `NotImplementedError`).
+- Audit log (`events`) append-only via `EventService`.
+- Outbox webhook: insert de `webhook_attempts` en misma TX + dispatch via `BackgroundTasks` con firma HMAC-SHA256.
+- Auth API key (SHA256+pepper) vía header `Authorization: Bearer` o `X-API-Key`.
+- Bootstrap seed de merchant/account/api_key dev en arranque non-prod.
+- Sentry init opcional via `SENTRY_DSN`.
+- Docker Compose local con Postgres 16; Dockerfile productivo corre `alembic upgrade head` + uvicorn.
+
+Pendiente / no en código aún:
+- Dashboard Next.js, Checkout Widget, Tienda demo.
+- Endpoints `/v1/banks`, `/v1/api_keys`, `/v1/payments/{id}/cancel`, GET/DELETE de un `webhook_endpoint`.
+- `client_secret` real (solo expone payment via API key).
+- Enforcement de `Idempotency-Key` (columna existe, header no validado).
+- Rate limiting, cifrado pgcrypto de `account_number_encrypted` / `signing_secret_encrypted` (hoy guardados como bytes plano).
+- Retry/backoff de webhooks (hoy: un único intento por BackgroundTask).
+- Integración real Bancaribe C2P2 (planeada Día 7).
 
 ---
 
@@ -89,13 +112,14 @@ graph TB
 
 | Container | Tecnología | Responsabilidad |
 |---|---|---|
-| **Core API** | Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0 | Endpoint REST, autenticación API key + JWT, orquestación de pagos, validación, generación de webhooks. |
-| **PostgreSQL** | Postgres 16 (Railway) | Almacén transaccional. Esquema con audit log append-only. NUMERIC(19,4) para montos. |
-| **Webhook Dispatcher** | FastAPI BackgroundTasks (MVP) → ARQ/Celery (Fase 2) | Envío asíncrono de webhooks a comerciantes. Reintentos exponenciales. Outbox pattern para garantía de entrega. |
-| **Checkout Widget** | TypeScript, Vite library mode | Modal embebible. Self-contained CSS. ~30KB minificado. Servido vía Vercel CDN. |
-| **Dashboard** | Next.js 15, TypeScript, Tailwind, shadcn/ui | UI del comerciante. SSR para SEO de la landing. Auth con Supabase. |
-| **Sentry** | SaaS | Captura de errores en producción. |
-| **Resend** | SaaS | Emails transaccionales (confirmaciones, recibos, alertas). |
+| **Core API** | Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0 async, asyncpg | REST, auth API key (SHA256+pepper), orquestación de pagos, audit log, outbox webhooks. |
+| **PostgreSQL** | Postgres 16 (docker-compose local; Railway/Supabase en deploy) | Almacén transaccional. `amount_cents BIGINT` (céntimos enteros, no NUMERIC en MVP). Audit log append-only. |
+| **Webhook Dispatcher** | FastAPI `BackgroundTasks` (MVP, **un intento**) → ARQ/Celery con backoff (Fase 2) | Envío asíncrono outbox. Firma HMAC-SHA256 header `X-Pasarela-Signature`. |
+| **Bank Adapter** | Strategy Pattern. `MockBankAdapter` activo. `BancaribeAdapter` stub. | Aísla integración bancaria del core. |
+| **Sentry** | SaaS (opcional vía `SENTRY_DSN`) | Captura de errores. |
+| **Checkout Widget** (planeado) | TypeScript, Vite library mode | Modal embebible. No en repo aún. |
+| **Dashboard** (planeado) | Next.js 15, Tailwind, shadcn/ui, Supabase Auth | UI comerciante. No en repo aún. |
+| **Resend** (planeado) | SaaS | Emails transaccionales. No integrado aún. |
 
 ---
 
@@ -187,9 +211,9 @@ class BankAdapter(ABC):
 
 #### Idempotency Layer
 
-Crítico para pagos. Cada `POST /v1/payments` requiere un header `Idempotency-Key`. Si llega la misma key dos veces, se devuelve la respuesta original sin reprocesar.
+Crítico para pagos. Diseño: cada `POST /v1/payments` lleva header `Idempotency-Key`. Si llega dos veces, devuelve respuesta original sin reprocesar.
 
-**MVP**: en memoria (dict con TTL). Suficiente para demo y baja concurrencia.
+**Estado MVP**: columna `payment_intents.idempotency_key` existe + índice único por `(merchant_id, idempotency_key)`, pero el enforcement del header en el endpoint **aún no implementado**. Pendiente Día 6.
 **Fase 2**: Redis con `SET NX EX 86400` para concurrencia distribuida.
 
 #### Event Service (Audit Log)
@@ -202,9 +226,12 @@ Tabla `events` append-only. Cada cambio de estado de un payment, cada llamada al
 
 #### Webhook Service (Outbox Pattern)
 
-Los webhooks no se envían directamente desde el código que procesa el pago. Se insertan en una tabla `webhook_outbox` dentro de la **misma transacción de DB** que el cambio de estado del payment. Un dispatcher separado lee la tabla y envía con reintentos exponenciales (1m, 5m, 15m, 1h, 6h, 24h — esquema Stripe).
+Los webhooks no se envían directamente desde el código que procesa el pago. Se insertan en tabla `webhook_attempts` dentro de la **misma transacción** que el cambio de estado del payment. Un dispatcher lee y envía firmado HMAC-SHA256.
 
-Esto garantiza que **ningún cambio de estado queda sin webhook** incluso si el servicio se cae justo después de procesar.
+**Estado MVP**: dispatch via `FastAPI BackgroundTasks` con **un solo intento** post-commit. Si falla, queda `delivered=false` en DB (replay manual).
+**Fase 2**: worker ARQ/Celery con backoff exponencial 1m/5m/15m/1h/6h/24h.
+
+Garantía outbox: **ningún cambio de estado queda sin fila en `webhook_attempts`** incluso si el proceso muere, porque la fila se inserta en la misma TX.
 
 ---
 
@@ -293,12 +320,12 @@ El MVP incluye los siguientes ganchos arquitectónicos pensados para activarse c
                  │                           │
                  ▼                           ▼
 ┌──────────────────────────┐    ┌──────────────────────────┐
-│  Vercel                   │    │  Railway                  │
+│  Vercel (planeado)        │    │  Railway / Supabase       │
 │  ─────                    │    │  ─────                    │
 │  - landing.pasarela.dev   │    │  - api.pasarela.dev       │
-│  - app.pasarela.dev       │    │    (FastAPI + workers)    │
+│  - app.pasarela.dev       │    │    (FastAPI, Dockerfile)  │
 │  - tienda.pasarela.dev    │    │  - Postgres 16            │
-│  - cdn.pasarela.dev/      │    │                           │
+│  - cdn.pasarela.dev/      │    │    (docker-compose local) │
 │    checkout.js            │    │                           │
 └──────────────────────────┘    └──────────┬───────────────┘
                                             │

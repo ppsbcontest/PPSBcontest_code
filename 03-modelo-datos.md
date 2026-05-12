@@ -1,19 +1,20 @@
 # 03 — Modelo de Datos
 
-> **Versión**: 1.0
+> **Versión**: 1.1
 > **DBMS**: PostgreSQL 16
 > **Convención**: snake_case, plurales para tablas, IDs prefijados estilo Stripe
+> **Migración actual**: `alembic/versions/3ca9bba912db_20260511_initial_schema.py`
 
 ---
 
 ## Principios de diseño
 
 1. **Audit-first**: tabla `events` append-only registra cada cambio relevante.
-2. **Money-safe**: todos los montos en `NUMERIC(19,4)` con currency explícito. Nunca FLOAT.
-3. **Soft deletes** con `deleted_at TIMESTAMPTZ NULL` (excepto en `events` que nunca se borra).
-4. **UUIDs como PKs** internas + IDs externos prefijados (`pi_`, `mch_`, `evt_`) para APIs.
-5. **TIMESTAMPTZ** siempre, nunca TIMESTAMP. UTC en DB, conversión en presentación.
-6. **Preparado para Fase 3**: campos como `flow_mode`, `acquiring_bank`, `merchant_account_id` ya presentes.
+2. **Money-safe**: montos en `BIGINT` céntimos (`amount_cents`) — enteros, no FLOAT. Currency explícito.
+3. **Soft deletes** con `deleted_at` NULL (solo `merchants` en MVP).
+4. **UUIDs como PKs** internas + IDs externos prefijados para APIs.
+5. **DateTime** server-default `now()`. UTC en DB, conversión en presentación. (Nota: migración usa `sa.DateTime()` — upgrade a `TIMESTAMPTZ` planeado.)
+6. **Preparado para Fase 3**: campos como `flow_mode`, `acquiring_bank`, `account_type` ya presentes.
 
 ---
 
@@ -139,6 +140,10 @@ erDiagram
 ```
 
 ---
+
+## Nota sobre los DDL siguientes
+
+Los DDL mostrados representan el **diseño objetivo**. La migración actual `3ca9bba912db_20260511_initial_schema.py` crea todas las tablas con sus columnas pero **omite los CHECK constraints** (formato RIF, formato teléfono/cédula, validación de status/currency/account_type) y los índices secundarios listados. Plan: agregarlos en migración subsiguiente Día 6.
 
 ## Tablas en detalle
 
@@ -390,16 +395,16 @@ stateDiagram-v2
     canceled --> [*]
 ```
 
-**Transiciones permitidas** (validadas en código):
+**State machine MVP (simplificada)**: el código actual maneja sólo `created` → `succeeded`/`failed`. Los estados intermedios `pending`/`processing`/`canceled` están en el diseño pero no en el endpoint `confirm` actual.
 
-| Desde | Hacia | Trigger |
-|---|---|---|
-| `created` | `pending` | Cliente abre checkout, se inicializa flujo |
-| `created` | `canceled` | Timeout (15 min sin actividad) |
-| `pending` | `processing` | Cliente envía clave OTP, llamada a Bancaribe |
-| `pending` | `canceled` | Timeout (5 min sin enviar OTP) |
-| `processing` | `succeeded` | Bancaribe responde aprobado |
-| `processing` | `failed` | Bancaribe responde rechazado o timeout |
+| Desde | Hacia | Trigger | Estado MVP |
+|---|---|---|---|
+| `created` | `succeeded` | `POST /confirm` + bank OK | ✅ implementado |
+| `created` | `failed` | `POST /confirm` + bank rechaza (`ValueError`) | ✅ implementado |
+| `created` / `requires_confirmation` | otros | flujo completo | 🟡 diseñado, pendiente |
+| `created` | `canceled` | Timeout 15 min | 🟡 job pendiente |
+
+Nota: `app/api/v1/payments.py` también acepta `requires_confirmation` como estado válido de entrada al `confirm`, pero ninguna ruta produce este estado aún.
 
 **Transiciones prohibidas** (lanzan excepción):
 - `succeeded` → cualquier otro (final state, irreversible)
@@ -412,14 +417,15 @@ stateDiagram-v2
 
 | Entidad | Prefijo | Ejemplo |
 |---|---|---|
-| Merchant | `mch_` | `mch_a1b2c3d4e5f6` |
+| Merchant | `merch_` | `merch_dev_001` |
 | Payment Intent | `pi_` | `pi_x9y8z7w6v5u4` |
-| API Key (publishable) | `pk_test_` / `pk_live_` | `pk_test_51HxYzABC...` |
-| API Key (secret) | `sk_test_` / `sk_live_` | `sk_test_51HxYzDEF...` |
-| Webhook Endpoint | `we_` | `we_q7w8e9r0t1y2` |
-| Event | `evt_` | `evt_3f4g5h6j7k8l` |
+| API Key (publishable, planeado) | `pk_test_` / `pk_live_` | `pk_test_51HxYzABC...` |
+| API Key (secret, MVP) | `sk_test_` / `sk_live_` (entrega) — interno `ak_` en `external_id` | `sk_test_dev_pasarela_001` |
+| Webhook Endpoint | `whep_` | `whep_q7w8e9r0t1y2` |
+| Webhook Attempt | `whatt_` | `whatt_3f4g5h6j7k8l` |
+| Event | `evt_` (planeado) | — |
 
-Generación: prefijo + 24 caracteres aleatorios base62.
+Generación MVP: prefijo + `secrets.token_urlsafe(16)` (≈22 chars base64url). Plan: estandarizar a 24 chars base62.
 
 ---
 
@@ -437,9 +443,10 @@ Ejemplo: `20260509_1400_initial_schema.py`
 
 ## Consideraciones de seguridad
 
-- **Datos sensibles cifrados**: `account_number_encrypted`, `signing_secret_encrypted` usan `pgcrypto` con clave maestra en variable de entorno.
-- **Cédulas y teléfonos**: en MVP almacenados en plano (necesarios para validar OTP). En Fase 2 se evalúa cifrado con búsqueda determinística.
-- **Backups**: Postgres en Railway con backups automáticos diarios.
+- **Datos sensibles cifrados** (diseño): `account_number_encrypted`, `signing_secret_encrypted` deben usar `pgcrypto` con clave maestra en env. **Estado MVP**: columnas `BYTEA` existen pero almacenan **bytes plano** (`secret.encode("utf-8")`). Cifrado pgcrypto pendiente Día 6/7.
+- **API keys**: hash SHA256 con pepper (`API_KEY_PEPPER` env). Plan: migrar a bcrypt cost 12 en Fase 2.
+- **Cédulas y teléfonos**: en MVP almacenados en plano (necesarios para validar OTP). En Fase 2 cifrado determinístico.
+- **Backups**: Postgres en plataforma (Railway/Supabase) con backups automáticos diarios.
 - **Replicación**: en Fase 2 se agrega read replica para reportes y dashboard.
 
 ---

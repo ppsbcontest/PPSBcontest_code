@@ -1,9 +1,18 @@
 # 05 — Flujo C2P End-to-End
 
-> **Versión**: 1.0
+> **Versión**: 1.1
 > **Aplica a**: Fase 1 (modelo facilitador)
 
-Este documento detalla el flujo técnico completo de un cobro C2P desde el clic del cliente final hasta la confirmación en el dashboard del comerciante.
+Este documento detalla el flujo técnico **objetivo** del cobro C2P. Las secciones marcadas 🟡 son diseño aún no implementado en el MVP actual.
+
+## Estado MVP (11-may-2026)
+
+El backend implementa la versión simplificada:
+- `POST /v1/payments` → crea intent en estado `created`, emite evento `payment_intent.created`, encola webhook outbox + dispatch background.
+- `POST /v1/payments/{id}/confirm` → usa `MockBankAdapter` (80% éxito aleatorio, latencia 1-3s). Transición directa `created` → `succeeded`/`failed`. Sin estados intermedios `pending`/`processing`.
+- Webhook firmado HMAC-SHA256 (`X-Pasarela-Signature: t=...,v1=...`), un único intento.
+
+No implementado (🟡): Checkout Widget, `client_secret`, integración real Bancaribe (`BancaribeAdapter` es stub), masking de PII, expiración de intents, conciliación, retries con backoff.
 
 ---
 
@@ -398,7 +407,7 @@ def pasarela_webhook():
 
 ## Consideraciones especiales
 
-### Idempotencia del banco
+### Idempotencia del banco 🟡 (no implementado)
 
 Si Pasarela tiene un timeout esperando respuesta de Bancaribe, **NO debe reintentar automáticamente** la llamada — podría duplicar el cobro. El flujo es:
 
@@ -408,7 +417,7 @@ Si Pasarela tiene un timeout esperando respuesta de Bancaribe, **NO debe reinten
 4. Si la consulta indica no procesada → marcar `failed` con código `bank_uncertain`.
 5. Notificar al comerciante para que verifique manualmente.
 
-### Expiración de payment_intents
+### Expiración de payment_intents 🟡 (no implementado)
 
 Un intent que no se confirma en 15 minutos se marca como `canceled` automáticamente. Esto se hace con un job recurrente (cada minuto) que ejecuta:
 

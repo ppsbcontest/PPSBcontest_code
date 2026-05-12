@@ -1,14 +1,14 @@
 # 01 — Visión Técnica
 
-> **Versión**: 1.0
-> **Fecha**: 9 de mayo de 2026
-> **Estado**: Borrador inicial — sujeto a refinamiento durante la construcción del MVP
+> **Versión**: 1.1
+> **Fecha**: 11 de mayo de 2026
+> **Estado**: Refinado durante construcción del MVP. Ver `02-arquitectura.md` para estado de implementación.
 
 ---
 
 ## Resumen ejecutivo
 
-**Pasarela** es una capa de developer-experience construida sobre el Open Banking de Bancaribe, diseñada para captar el segmento SMB (pequeñas y medianas empresas) del e-commerce venezolano — un mercado actualmente desatendido por las pasarelas existentes (Megasoft, Cashea, UbiiAPI, Yipi, Cujiware) que se enfocan en enterprise, modelos de financiamiento o plugins fragmentados.
+**Rutiva** es una capa de developer-experience construida sobre el Open Banking de Bancaribe, diseñada para captar el segmento SMB (pequeñas y medianas empresas) del e-commerce venezolano — un mercado actualmente desatendido por las pasarelas existentes (Megasoft, Cashea, UbiiAPI, Yipi, Cujiware) que se enfocan en enterprise, modelos de financiamiento o plugins fragmentados.
 
 Nuestra propuesta no compite con Bancaribe — **opera encima de Bancaribe** como capa de abstracción developer-friendly, replicando la filosofía que hizo a Stripe el líder global de procesamiento de pagos.
 
@@ -47,16 +47,16 @@ Las pasarelas existentes en Venezuela cubren segmentos distintos al SMB:
 
 ## Nuestra solución
 
-Pasarela construye lo que falta entre el desarrollador y el Open Banking de Bancaribe:
+Rutiva construye lo que falta entre el desarrollador y el Open Banking de Bancaribe:
 
 ### 1. SDK moderno
-TypeScript/JavaScript, Python y PHP. Una sola línea de instalación (`npm install @pasarela/sdk`), API tipada, ejemplos copy-paste, errores legibles.
+TypeScript/JavaScript, Python y PHP. Una sola línea de instalación (`npm install @rutiva/sdk`), API tipada, ejemplos copy-paste, errores legibles.
 
 ```javascript
 // Aceptar pagos C2P en Venezuela en 5 líneas
-import { Pasarela } from '@pasarela/sdk';
-const pasarela = new Pasarela('sk_test_...');
-const payment = await pasarela.payments.create({
+import { Rutiva } from '@rutiva/sdk';
+const rutiva = new Rutiva('sk_test_...');
+const payment = await rutiva.payments.create({
   amount: 50.00,
   currency: 'VES',
   customer: { phone: '04141234567', id: 'V12345678' }
@@ -73,7 +73,7 @@ Una etiqueta `<script>` y un botón. Modal pre-construido con el flujo C2P compl
 WooCommerce, Shopify, PrestaShop, Magento. Instalación de un clic. Configuración con la API key.
 
 ### 5. Documentación pública estilo Stripe
-`docs.pasarela.dev` con quickstart, API reference, ejemplos en múltiples lenguajes, sandbox en línea, troubleshooting.
+`docs.rutiva.dev` con quickstart, API reference, ejemplos en múltiples lenguajes, sandbox en línea, troubleshooting.
 
 ---
 
@@ -124,7 +124,7 @@ Bajo el paraguas regulatorio de Bancaribe como **sub-agente tecnológico** (corr
 - Split payments para marketplaces (modelo Stripe Connect)
 - Escrow / holds para pagos condicionados
 - Refunds instantáneos desde balance propio
-- Financiamiento a comerciantes basado en flujo transaccional (modelo Stripe Capital)
+- **Financiamiento a comerciantes basado en flujo transaccional (modelo Stripe Capital)**
 - Multi-divisa (VES, USD, USDT)
 
 **Modelo de monetización Fase 3**: comisión completa al comerciante (1.5%-2.5%) + float income + productos premium.

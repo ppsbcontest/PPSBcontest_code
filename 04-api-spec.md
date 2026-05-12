@@ -1,10 +1,17 @@
 # 04 — API Specification
 
-> **Versión**: v1
-> **Base URL (sandbox)**: `https://api.pasarela.dev/v1`
+> **Versión**: v1.1
+> **Base URL (local)**: `http://localhost:8000`
+> **Base URL (sandbox planeado)**: `https://api.pasarela.dev/v1`
 > **Formato**: REST + JSON
-> **Autenticación**: API Key (Bearer token)
+> **Autenticación**: API Key vía `Authorization: Bearer <key>` o `X-API-Key: <key>`
 > **Inspirada en**: Stripe API design principles
+
+## Leyenda de estado
+
+- ✅ implementado en MVP
+- 🟡 spec definida, no implementada aún (Día 6-7)
+- 🔵 Fase 2+
 
 ---
 
@@ -22,15 +29,20 @@
 
 ## Autenticación
 
-Toda llamada (excepto webhooks entrantes desde Bancaribe y endpoints públicos del dashboard) requiere el header:
+Toda llamada protegida acepta cualquiera de:
 
 ```http
-Authorization: Bearer sk_test_<clave_secreta>
+Authorization: Bearer sk_test_<clave>
+X-API-Key: sk_test_<clave>
 ```
 
-Hay dos tipos de API key:
-- **`pk_test_...`** / **`pk_live_...`**: publishable. Solo se usa en el frontend del comerciante (Checkout Widget). Solo permite crear `payment_intents` con monto/datos pre-aprobados.
-- **`sk_test_...`** / **`sk_live_...`**: secret. Uso exclusivo en backend del comerciante. Acceso completo a la API.
+MVP entrega solo **secret keys** (`sk_test_*`). El bootstrap dev crea: `sk_test_dev_pasarela_001`.
+
+Tipos planeados:
+- **`pk_test_*` / `pk_live_*`** (🟡): publishable, frontend, scope reducido.
+- **`sk_test_*` / `sk_live_*`** (✅): secret, backend, acceso completo.
+
+Hash en DB: SHA256 con pepper (`API_KEY_PEPPER` env). Migración a bcrypt planeada Fase 2.
 
 **Nunca expongas un secret key en HTML, JavaScript del cliente, o repositorios públicos.**
 
@@ -38,7 +50,7 @@ Hay dos tipos de API key:
 
 ## Idempotencia
 
-Endpoints de escritura aceptan header `Idempotency-Key`:
+Endpoints de escritura **aceptarán** header `Idempotency-Key`:
 
 ```http
 Idempotency-Key: cliente-orden-12345
@@ -46,7 +58,7 @@ Idempotency-Key: cliente-orden-12345
 
 Si el mismo `Idempotency-Key` llega dos veces (combinado con el mismo `sk`), se devuelve la respuesta original sin reprocesar. TTL: 24 horas.
 
-**Obligatorio** en `POST /v1/payments`.
+**Estado MVP** (🟡): columna `payment_intents.idempotency_key` + índice único `(merchant_id, idempotency_key)` existen, pero el endpoint **no valida ni consulta el header todavía**. Pendiente Día 6.
 
 ---
 
@@ -54,11 +66,22 @@ Si el mismo `Idempotency-Key` llega dos veces (combinado con el mismo `sk`), se 
 
 ### Payment Intents
 
-#### `POST /v1/payments`
+#### `POST /v1/payments` ✅
 
 Crea un nuevo intent de cobro C2P.
 
-**Request:**
+**Request actual MVP** (campos planos, no anidados):
+```json
+{
+  "amount": 5000,
+  "currency": "VES",
+  "customer_phone": "04141234567",
+  "customer_id_document": "V12345678",
+  "customer_bank_code": "0114"
+}
+```
+
+**Request objetivo (planeado, anidado + metadata)**:
 ```json
 {
   "amount": 5000,
@@ -69,8 +92,7 @@ Crea un nuevo intent de cobro C2P.
     "bank_code": "0114"
   },
   "metadata": {
-    "order_id": "ORD-12345",
-    "product_sku": "ZAPATO-001"
+    "order_id": "ORD-12345"
   }
 }
 ```
@@ -80,47 +102,54 @@ Crea un nuevo intent de cobro C2P.
 - `bank_code` es el código ABA del banco del cliente (no del comerciante).
 - `metadata` es opcional, sirve para vincular con sistemas del comerciante.
 
-**Response 201:**
+**Response 201 actual MVP** (campos planos, sin masking, sin client_secret, sin expires_at):
 ```json
 {
-  "id": "pi_x9y8z7w6v5u4t3s2r1q0",
-  "object": "payment_intent",
-  "status": "created",
-  "amount": 5000,
+  "id": "uuid",
+  "external_id": "pi_xxxxxxxxxxxx",
+  "merchant_id": "uuid",
+  "merchant_account_id": "uuid",
+  "amount_cents": 5000,
   "currency": "VES",
-  "customer": {
-    "phone": "0414****567",
-    "id_document": "V*****678",
-    "bank_code": "0114"
-  },
-  "client_secret": "pi_x9y8z7w6v5u4t3s2r1q0_secret_a1b2c3",
-  "metadata": {
-    "order_id": "ORD-12345",
-    "product_sku": "ZAPATO-001"
-  },
-  "created_at": "2026-05-09T18:30:00Z",
-  "expires_at": "2026-05-09T18:45:00Z"
+  "status": "created",
+  "customer_phone": "04141234567",
+  "customer_id_document": "V12345678",
+  "customer_bank_code": "0114",
+  "flow_mode": "direct_to_merchant",
+  "bank_reference": null,
+  "failure_code": null,
+  "failure_message": null,
+  "created_at": "2026-05-11T18:30:00",
+  "updated_at": "2026-05-11T18:30:00",
+  "confirmed_at": null,
+  "succeeded_at": null,
+  "failed_at": null
 }
 ```
 
-**Notas**:
-- `client_secret` se entrega al frontend para que el Widget pueda confirmar el pago sin exponer el `sk`.
-- Datos sensibles (`phone`, `id_document`) se devuelven enmascarados.
-- El intent expira automáticamente a los 15 minutos si no se confirma.
+**Pendientes**:
+- 🟡 Masking de `customer_phone` / `customer_id_document` en respuesta.
+- 🟡 `client_secret` para uso frontend con `pk_*`.
+- 🟡 Campo `expires_at` + job de expiración a 15 min.
+- 🟡 `metadata` y wrapper `customer` anidado.
 
 ---
 
-#### `POST /v1/payments/{id}/confirm`
+#### `POST /v1/payments/{intent_id}/confirm` ✅
 
-Confirma el pago con la clave OTP del cliente. Este endpoint se llama desde el frontend (Widget) usando el `client_secret`.
+Confirma el pago con la clave OTP. MVP actual lo expone via `sk` (Authorization). El uso desde frontend con `pk` + `client_secret` queda 🟡.
 
-**Request:**
+**Path param**: `{intent_id}` es el UUID interno (no `external_id`).
+
+**Request actual MVP:**
 ```json
 {
-  "client_secret": "pi_x9y8z7w6v5u4t3s2r1q0_secret_a1b2c3",
+  "client_secret": "ignored_in_mvp",
   "otp": "123456"
 }
 ```
+
+Nota: el schema requiere `client_secret` pero en MVP **no se valida** (auth real vía API key). El estado de entrada aceptado es `created` o `requires_confirmation`. La llamada usa `MockBankAdapter` (80% éxito aleatorio).
 
 **Response 200 (éxito):**
 ```json
@@ -186,31 +215,30 @@ Consulta un payment intent específico.
 
 ---
 
-#### `GET /v1/payments`
+#### `GET /v1/payments` ✅
 
 Lista payment intents del comerciante.
 
-**Query params:**
-- `limit` (1-100, default 25)
-- `starting_after` (cursor: el último ID de la página anterior)
-- `status` (filtro: `created`, `pending`, `processing`, `succeeded`, `failed`, `canceled`)
-- `created[gte]` y `created[lte]` (timestamps ISO 8601)
+**Query params actual MVP:**
+- `limit` (1-100, default 20)
+- `cursor` (opaco, base64url de `created_at|uuid`)
 
-**Response 200:**
+**Pendiente** (🟡): filtros `status`, `created[gte]`, `created[lte]`.
+
+**Response 200 (formato actual):**
 ```json
 {
-  "object": "list",
-  "has_more": true,
-  "data": [
-    { "id": "pi_xxx", "status": "succeeded", "amount": 5000, ... },
-    { "id": "pi_yyy", "status": "failed", "amount": 12000, ... }
-  ]
+  "items": [
+    { "id": "uuid", "external_id": "pi_xxx", "status": "succeeded", "amount_cents": 5000, ... }
+  ],
+  "next_cursor": "base64url|opaco|null",
+  "has_more": true
 }
 ```
 
 ---
 
-#### `POST /v1/payments/{id}/cancel`
+#### `POST /v1/payments/{id}/cancel` 🟡 (no implementado)
 
 Cancela un payment intent que aún no se ha procesado (estados `created` o `pending`).
 
@@ -228,7 +256,7 @@ Cancela un payment intent que aún no se ha procesado (estados `created` o `pend
 
 ### Webhooks
 
-#### `POST /v1/webhook_endpoints`
+#### `POST /v1/webhook_endpoints` ✅
 
 Registra una URL para recibir notificaciones de eventos.
 
@@ -242,16 +270,18 @@ Registra una URL para recibir notificaciones de eventos.
 
 `enabled_events` acepta valores específicos o `["*"]` para todos los eventos.
 
-**Response 201:**
+**Response 201 actual MVP** (prefix `whep_`, no `we_`):
 ```json
 {
-  "id": "we_q7w8e9r0t1y2",
-  "object": "webhook_endpoint",
+  "id": "uuid",
+  "external_id": "whep_xxxxxxxxxxxx",
+  "merchant_id": "uuid",
   "url": "https://mi-tienda.com/webhooks/pasarela",
-  "enabled_events": ["payment.succeeded", "payment.failed"],
-  "signing_secret": "whsec_xxxxxxxxxxxxxxxxxxxxxxxx",
+  "enabled_events": ["payment_intent.succeeded", "payment_intent.failed"],
   "status": "active",
-  "created_at": "2026-05-09T18:00:00Z"
+  "created_at": "...",
+  "updated_at": "...",
+  "signing_secret": "whsec_xxxxxxxxxxxxxxxxxxxxxxxx"
 }
 ```
 
@@ -259,19 +289,19 @@ Registra una URL para recibir notificaciones de eventos.
 
 ---
 
-#### `GET /v1/webhook_endpoints`
+#### `GET /v1/webhook_endpoints` ✅
 
-Lista los endpoints configurados.
+Lista los endpoints configurados (paginación cursor — mismo formato que `/v1/payments`).
 
 ---
 
-#### `DELETE /v1/webhook_endpoints/{id}`
+#### `DELETE /v1/webhook_endpoints/{id}` 🟡 (no implementado)
 
 Elimina un endpoint.
 
 ---
 
-### API Keys
+### API Keys 🟡 (no implementado)
 
 #### `POST /v1/api_keys`
 
@@ -306,7 +336,7 @@ Revoca una API key. Llamadas con esa key fallarán con 401.
 
 ---
 
-### Banks (recurso público)
+### Banks (recurso público) 🟡 (no implementado)
 
 #### `GET /v1/banks`
 
@@ -333,31 +363,36 @@ Lista los bancos cuyas claves OTP pueden ser validadas (corresponde a `listarBan
 
 Cuando ocurre un evento, Pasarela hace un `POST` al `url` del `webhook_endpoint`.
 
-**Headers:**
+**Headers actuales MVP:**
 ```http
 Content-Type: application/json
-Pasarela-Signature: t=1731234567,v1=abc123def456...
-User-Agent: Pasarela/1.0
+X-Pasarela-Signature: t=1731234567,v1=abc123def456...
+X-Pasarela-Event-Type: payment_intent.succeeded
 ```
 
-**Payload:**
+Nota: el header de firma es `X-Pasarela-Signature` (con prefijo `X-`). El body se envía como JSON serializado compacto (`separators=(",", ":")`).
+
+**Payload actual MVP:**
 ```json
 {
-  "id": "evt_3f4g5h6j7k8l",
-  "object": "event",
-  "type": "payment.succeeded",
-  "created_at": "2026-05-09T18:32:15Z",
+  "type": "payment_intent.succeeded",
   "data": {
-    "object": {
-      "id": "pi_x9y8z7w6v5u4t3s2r1q0",
-      "amount": 5000,
-      "currency": "VES",
-      "status": "succeeded",
-      ...
-    }
+    "id": "uuid",
+    "external_id": "pi_xxx",
+    "status": "succeeded",
+    "amount_cents": 5000,
+    "currency": "VES",
+    "merchant_id": "uuid",
+    "bank_reference": "MOCK-...",
+    "created_at": "...",
+    "updated_at": "...",
+    "failure_code": null,
+    "failure_message": null
   }
 }
 ```
+
+Nota: el wrapper `id`/`object`/`created_at`/`data.object` estilo Stripe es objetivo de diseño. MVP usa `{type, data}` plano.
 
 ### Verificación de firma
 
@@ -384,7 +419,9 @@ def verify_signature(payload: bytes, signature_header: str, secret: str) -> bool
 
 ### Reintentos
 
-Si tu endpoint no devuelve `2xx`, Pasarela reintenta con backoff exponencial:
+**Estado MVP** (🟡): un único intento por `BackgroundTask`. Si responde no-2xx o lanza error, `delivered=false` queda en DB sin reintento automático. Pendiente worker con backoff.
+
+**Diseño objetivo** (Fase 2): si tu endpoint no devuelve `2xx`, Pasarela reintenta con backoff exponencial:
 
 | Intento | Tiempo desde el primero |
 |---|---|
@@ -400,15 +437,15 @@ Después del séptimo intento, el webhook se marca como `failed` y debe re-envia
 
 ### Eventos disponibles
 
-| Evento | Cuándo ocurre |
-|---|---|
-| `payment.created` | Se crea un nuevo payment intent |
-| `payment.pending` | Cliente accedió al checkout |
-| `payment.processing` | Se envió la solicitud a Bancaribe |
-| `payment.succeeded` | Pago confirmado por el banco |
-| `payment.failed` | Pago rechazado |
-| `payment.canceled` | Pago cancelado (timeout o manual) |
-| `webhook_endpoint.created` | Se registró un nuevo endpoint |
+| Evento | Cuándo ocurre | Estado |
+|---|---|---|
+| `payment_intent.created` | Se crea un nuevo payment intent | ✅ |
+| `payment_intent.succeeded` | Pago confirmado por el banco | ✅ |
+| `payment_intent.failed` | Pago rechazado | ✅ |
+| `webhook_endpoint.created` | Se registró un nuevo endpoint (audit log; no se dispara webhook) | ✅ (solo evento) |
+| `payment_intent.pending` / `.processing` / `.canceled` | Estados intermedios | 🟡 |
+
+Nota: el namespace actual es `payment_intent.*` (no `payment.*`).
 
 ---
 
@@ -458,7 +495,7 @@ Todos los errores siguen este formato:
 
 ---
 
-## Rate limits
+## Rate limits 🟡 (no implementado en MVP)
 
 | Tier | Requests por minuto | Requests por segundo |
 |---|---|---|

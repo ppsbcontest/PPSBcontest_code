@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Pasarela API", lifespan=lifespan)
+app = FastAPI(title="Rutiva API", lifespan=lifespan)
 
 app.include_router(payments.router)
 app.include_router(webhook_endpoints.router)

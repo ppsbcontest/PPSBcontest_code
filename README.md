@@ -1,6 +1,6 @@
-# Pasarela API
+# Rutiva API
 
-Pasarela de pagos C2P (Customer-to-Payment) para el mercado venezolano. Backend FastAPI con integración a bancos vía Strategy Pattern.
+Rutiva — pasarela de pagos C2P (Customer-to-Payment) para el mercado venezolano. Backend FastAPI con integración a bancos vía Strategy Pattern.
 
 ## Stack
 
@@ -91,7 +91,7 @@ Disponible en `http://localhost:8000`. Docs: `/docs`.
 Al primer arranque, `bootstrap.py` seedea:
 - 1 merchant dev (`merch_dev_001`)
 - 1 cuenta default
-- 1 API key con plaintext: **`sk_test_dev_pasarela_001`** (solo dev, no prod)
+- 1 API key con plaintext: **`sk_test_dev_rutiva_001`** (solo dev, no prod)
 
 ## Variables de entorno
 
@@ -108,13 +108,13 @@ Al primer arranque, `bootstrap.py` seedea:
 API key por request. Dos formatos aceptados:
 
 ```
-Authorization: Bearer sk_test_dev_pasarela_001
+Authorization: Bearer sk_test_dev_rutiva_001
 ```
 
 o
 
 ```
-X-API-Key: sk_test_dev_pasarela_001
+X-API-Key: sk_test_dev_rutiva_001
 ```
 
 El servidor hashea con sha256 + pepper, busca en `api_keys.key_hash`, valida `revoked_at IS NULL`, carga cuenta default activa, y actualiza `last_used_at`.
@@ -157,8 +157,8 @@ GET /health → {"status": "ok"}
 Cada request lleva header:
 
 ```
-X-Pasarela-Signature: t=<unix_timestamp>,v1=<sha256_hex>
-X-Pasarela-Event-Type: payment_intent.succeeded
+X-Rutiva-Signature: t=<unix_timestamp>,v1=<sha256_hex>
+X-Rutiva-Event-Type: payment_intent.succeeded
 ```
 
 Donde `v1 = HMAC_SHA256(signing_secret, f"{t}.{body}")`. El receptor debe:
@@ -227,7 +227,7 @@ alembic downgrade -1
 ## Testing manual E2E
 
 ```bash
-KEY="sk_test_dev_pasarela_001"
+KEY="sk_test_dev_rutiva_001"
 H="Authorization: Bearer $KEY"
 BASE="http://localhost:8000"
 
@@ -289,13 +289,13 @@ El `CMD` del Dockerfile ejecuta `alembic upgrade head && uvicorn`, asegurando mi
 ### Build Docker local
 
 ```bash
-docker build -t pasarela:test .
+docker build -t rutiva:test .
 docker run --rm --network host \
   -e DATABASE_URL="..." \
   -e API_KEY_PEPPER="..." \
   -e ENVIRONMENT="staging" \
   -e PORT="8000" \
-  pasarela:test
+  rutiva:test
 ```
 
 ## Notas técnicas

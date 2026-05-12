@@ -101,8 +101,8 @@ class WebhookService:
                         content=body,
                         headers={
                             "Content-Type": "application/json",
-                            "X-Pasarela-Signature": sig_header,
-                            "X-Pasarela-Event-Type": attempt.event_type,
+                            "X-Rutiva-Signature": sig_header,
+                            "X-Rutiva-Event-Type": attempt.event_type,
                         },
                     )
                 attempt.response_status = resp.status_code
