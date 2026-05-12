@@ -9,7 +9,8 @@
       "Bash(python3 -c \"from app.main import app; print\\('routes:', [r.path for r in app.routes]\\)\")",
       "Bash(ls venv *)",
       "Bash(ls .venv)",
-      "Bash(python3 -c \"import ast; ast.parse\\(open\\('app/database.py'\\).read\\(\\)\\); ast.parse\\(open\\('alembic/env.py'\\).read\\(\\)\\)\")"
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('app/database.py'\\).read\\(\\)\\); ast.parse\\(open\\('alembic/env.py'\\).read\\(\\)\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('app/main.py'\\).read\\(\\)\\)\")"
     ]
   }
 }

@@ -287,6 +287,20 @@ Render free tier soporta web service Docker + Postgres managed.
 - Free tier Postgres expira a los 90 días — backup periódico.
 - Render Postgres requiere SSL siempre. Código auto-añade `ssl=require` al detectar `render.com` en el host.
 
+**Keep-alive con UptimeRobot (evita idle de 15 min)**
+
+Endpoint dedicado: `GET /ping` → `pong` (text/plain, ~6 bytes, sin DB, sin JSON, no aparece en OpenAPI).
+
+Config UptimeRobot:
+
+1. Crear monitor tipo **HTTP(s)**.
+2. URL: `https://<tu-servicio>.onrender.com/ping`.
+3. Interval: **5 minutos** (mínimo free tier, suficiente — Render duerme a los 15).
+4. Keyword opcional: `pong` (Monitor Type → HTTP(s) keyword exists).
+5. Alert contacts: email propio.
+
+Costo en Render: 12 requests/hora × 6 bytes response. Despreciable.
+
 ### Producción: Koyeb + Supabase (free tier)
 
 **Postgres**: Supabase project, usar **Transaction pooler** (puerto 6543).
