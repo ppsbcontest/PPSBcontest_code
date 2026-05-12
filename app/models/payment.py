@@ -33,3 +33,5 @@ class PaymentIntent(Base):
     confirmed_at: Mapped[datetime] = mapped_column(nullable=True)
     succeeded_at: Mapped[datetime] = mapped_column(nullable=True)
     failed_at: Mapped[datetime] = mapped_column(nullable=True)
+    canceled_at: Mapped[datetime] = mapped_column(nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now() + interval '15 minutes'"))

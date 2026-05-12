@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import re
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response, status
@@ -47,6 +47,9 @@ def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
         return datetime.fromisoformat(ca_iso), UUID(id_str)
     except Exception:
         raise HTTPException(status_code=400, detail="invalid_cursor")
+
+
+PAYMENT_INTENT_TTL = timedelta(minutes=15)
 
 
 def _intent_payload(intent: PaymentIntent) -> dict:
@@ -119,6 +122,7 @@ async def create_payment(
         flow_mode="direct_to_merchant",
         idempotency_key=idempotency_key,
         client_secret_hash=client_secret_hash,
+        expires_at=datetime.utcnow() + PAYMENT_INTENT_TTL,
     )
     db.add(intent)
     await db.flush()
@@ -198,6 +202,32 @@ async def confirm_payment(
         raise HTTPException(
             status_code=409, detail=f"invalid_state:{intent.status}"
         )
+
+    if intent.expires_at is not None and datetime.utcnow() > intent.expires_at:
+        intent.status = "canceled"
+        intent.canceled_at = datetime.utcnow()
+        intent.updated_at = datetime.utcnow()
+        exp_payload = {"type": "payment_intent.canceled", "data": _intent_payload(intent)}
+        await EventService.record(
+            db,
+            event_type="payment_intent.canceled",
+            payload=exp_payload,
+            related_entity_id=intent.id,
+            related_entity_type="payment_intent",
+            actor_id=actor_id,
+            actor_type=actor_type,
+        )
+        exp_attempt_ids = await WebhookService.record_attempts(
+            db,
+            merchant_id=intent.merchant_id,
+            event_type="payment_intent.canceled",
+            payload=exp_payload,
+            payment_intent_id=intent.id,
+        )
+        await db.commit()
+        for aid in exp_attempt_ids:
+            background.add_task(WebhookService.dispatch, aid)
+        raise HTTPException(status_code=400, detail="payment_expired")
 
     account = await db.get(MerchantAccount, intent.merchant_account_id)
     if account is None:
@@ -291,6 +321,50 @@ async def list_payments(
         next_cursor=next_cursor,
         has_more=has_more,
     )
+
+
+@router.post("/{intent_id}/cancel", response_model=PaymentResponse)
+async def cancel_payment(
+    intent_id: UUID,
+    background: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
+) -> PaymentIntent:
+    """Cancela un payment_intent en estado `created`. Solo backend (sk_)."""
+    intent = await db.get(PaymentIntent, intent_id)
+    if intent is None or intent.merchant_id != auth.merchant_id:
+        raise HTTPException(status_code=404, detail="payment_intent_not_found")
+    if intent.status != "created":
+        raise HTTPException(status_code=400, detail=f"invalid_state:{intent.status}")
+
+    intent.status = "canceled"
+    intent.canceled_at = datetime.utcnow()
+    intent.updated_at = datetime.utcnow()
+
+    event_payload = {"type": "payment_intent.canceled", "data": _intent_payload(intent)}
+    await EventService.record(
+        db,
+        event_type="payment_intent.canceled",
+        payload=event_payload,
+        related_entity_id=intent.id,
+        related_entity_type="payment_intent",
+        actor_id=auth.api_key_id,
+        actor_type="api_key",
+    )
+    attempt_ids = await WebhookService.record_attempts(
+        db,
+        merchant_id=auth.merchant_id,
+        event_type="payment_intent.canceled",
+        payload=event_payload,
+        payment_intent_id=intent.id,
+    )
+
+    await db.commit()
+    await db.refresh(intent)
+
+    for aid in attempt_ids:
+        background.add_task(WebhookService.dispatch, aid)
+    return intent
 
 
 @router.get("/{intent_id}", response_model=PaymentResponse)

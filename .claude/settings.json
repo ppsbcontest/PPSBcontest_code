@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python3 -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['app/main.py','app/api/v1/payments.py','app/api/deps.py','app/models/payment.py','app/schemas/payment.py']]\")",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('app/schemas/payment.py'\\).read\\(\\)\\); ast.parse\\(open\\('app/banking/mock.py'\\).read\\(\\)\\)\")",
-      "Bash(python3 -c \"import ast; ast.parse\\(open\\('app/main.py'\\).read\\(\\)\\); ast.parse\\(open\\('app/api/v1/banks.py'\\).read\\(\\)\\)\")"
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('app/main.py'\\).read\\(\\)\\); ast.parse\\(open\\('app/api/v1/banks.py'\\).read\\(\\)\\)\")",
+      "Bash(python3 -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['app/api/v1/payments.py','app/models/payment.py','app/schemas/payment.py']]\")"
     ]
   }
 }

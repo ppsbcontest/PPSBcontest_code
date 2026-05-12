@@ -71,6 +71,8 @@ class PaymentResponse(BaseModel):
     confirmed_at: Optional[datetime] = None
     succeeded_at: Optional[datetime] = None
     failed_at: Optional[datetime] = None
+    canceled_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
 
 
 class PaymentCreateResponse(PaymentResponse):
